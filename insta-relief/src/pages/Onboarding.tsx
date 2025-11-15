@@ -21,39 +21,44 @@ export default function OnboardingPage() {
   const [password, setPassword] = useState("");
   const [phone, setPhone] = useState("");
   const [zip, setZip] = useState("");
+  const [walletAddress, setWalletAddress] = useState("");
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
+  const validateWalletAddress = (address: string): boolean => {
+    if (address.length < 32 || address.length > 44) return false;
+    const base58 = /^[1-9A-HJ-NP-Za-km-z]+$/;
+    return base58.test(address);
+  };
+
   const handleSignUp = async () => {
-    if (!firstName || !lastName || !email || !password || !phone || !zip) {
+    if (!firstName || !lastName || !email || !password || !phone || !zip || !walletAddress) {
       alert("Please fill all fields.");
       return;
     }
 
+    if (!validateWalletAddress(walletAddress)) {
+      alert("Invalid Solana wallet address. Please enter a valid Devnet address.");
+      return;
+    }
+
     setLoading(true);
+
     try {
-      // format phone (optional)
-      const formattedPhone = phone.trim().replace(/\D/g, "");
-
-      const userCredential = await createUserWithEmailAndPassword(
-        auth,
-        email,
-        password
-      );
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
-
-      const policyId = generatePolicyId(zip);
 
       await setDoc(doc(db, "users", user.uid), {
         firstName,
         lastName,
         email,
-        phone: formattedPhone,
+        phone: phone.trim().replace(/\D/g, ""),
         zip,
-        policyId,
-        isActivated: true,
+        walletAddress,
+        policyId: generatePolicyId(zip),
         status: "ACTIVE",
         balance: 0,
+        isActivated: true,
         createdAt: new Date().toISOString(),
       });
 
@@ -80,6 +85,7 @@ export default function OnboardingPage() {
           >
             Get Protected
           </Typography>
+
           <Stack spacing={3}>
             <Stack direction="row" spacing={2}>
               <TextField
@@ -95,12 +101,14 @@ export default function OnboardingPage() {
                 onChange={(e) => setLastName(e.target.value)}
               />
             </Stack>
+
             <TextField
               label="Email Address"
               fullWidth
               value={email}
               onChange={(e) => setEmail(e.target.value)}
             />
+
             <TextField
               label="Password"
               type="password"
@@ -108,6 +116,7 @@ export default function OnboardingPage() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
+
             <TextField
               label="Phone Number"
               fullWidth
@@ -115,11 +124,21 @@ export default function OnboardingPage() {
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
             />
+
             <TextField
               label="ZIP Code"
               fullWidth
               value={zip}
               onChange={(e) => setZip(e.target.value)}
+            />
+
+            <TextField
+              label="Solana Wallet Address (Devnet)"
+              fullWidth
+              value={walletAddress}
+              onChange={(e) => setWalletAddress(e.target.value)}
+              placeholder="e.g. FiRnroaThU3w642sKZnNj84xW5b3J2nJCLhV3W3oxy9d"
+              helperText="Your Solana Devnet wallet where payouts will be sent."
             />
 
             <Button
