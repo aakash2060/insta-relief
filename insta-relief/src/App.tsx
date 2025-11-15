@@ -1,14 +1,21 @@
+import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { Typography, Box } from "@mui/material";
+import AppThemeProvider from "./theme/AppThemeProvider";
 
-function App() {
-
-
+export default function App() {
   return (
-    <>
-      <div>
-      Welcome to Insta Relief
-       </div>
-    </>
-  )
-}
+    <AppThemeProvider>
+      <BrowserRouter>
+        <Box sx={{ p: 3 }}>
+          <Typography variant="h4" fontWeight={700}>
+            Welcome to InstaRelief
+          </Typography>
+        </Box>
 
-export default App
+        <Routes>
+          
+        </Routes>
+      </BrowserRouter>
+    </AppThemeProvider>
+  );
+}
