@@ -15,7 +15,7 @@ export default function Footer() {
       }}
     >
       <Typography sx={{ color: "#10B981", fontWeight: 500 }}>
-        © {new Date().getFullYear()} InstaRelief — Instant Climate Relief
+        © {new Date().getFullYear()} InstaRelief — Built at Hack NYU
       </Typography>
     </Box>
   );
