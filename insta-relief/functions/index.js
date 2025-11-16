@@ -1,132 +1,357 @@
+import * as dotenv from "dotenv";
+dotenv.config();
+
 const functions = require("firebase-functions");
 const admin = require("firebase-admin");
+const { sendEmail } = require("./utils/email");
+const zipToCounty = require("./data/zip_to_county.json");
 
 admin.initializeApp();
-
-// Emulator setup
-// if (process.env.FIREBASE_EMULATOR_HUB) {
-//   process.env.FIRESTORE_EMULATOR_HOST = "127.0.0.1:8094";
-//   console.log("Connected Firestore to local emulator on 127.0.0.1:8094");
-// }
-
 const db = admin.firestore();
 
-// if (process.env.FIRESTORE_EMULATOR_HOST) {
-//   db.settings({ host: process.env.FIRESTORE_EMULATOR_HOST, ssl: false });
-// }
-
-// Send email with SMTP2GO
-async function sendEmail(apiKey, to, sender, subject, htmlBody, textBody) {
-  const response = await fetch("https://api.smtp2go.com/v3/email/send", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Smtp2go-Api-Key": apiKey,
-    },
-    body: JSON.stringify({
-      to,
-      sender,
-      subject,
-      html_body: htmlBody,
-      text_body: textBody,
-    }),
-  });
-
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(`SMTP2GO API error: ${JSON.stringify(errorData)}`);
-  }
-
-  return response.json();
+/**
+ * Helper: Should we send payout?
+ */
+function shouldSendPayout(severity) {
+  const sev = (severity || "").toLowerCase();
+  return sev === "extreme" || sev === "severe";
 }
 
-// Cloud Function (onCall)
-exports.disaster = functions.https.onCall(async (request, context) => {
-  const zip = request.data.zip;
-  if (!zip) {
-    throw new functions.https.HttpsError(
-      "invalid-argument",
-      "Zip code is required"
-    );
+/**
+ * Convert NOAA areaDesc → list of ZIPs
+ */
+function mapAreaToZips(areaDesc) {
+  if (!areaDesc) return [];
+
+  // Convert to lowercase for matching
+  const area = areaDesc.toLowerCase();
+  
+  return Object.entries(zipToCounty)
+    .filter(([key, zip]) => area.includes(key.toLowerCase()))
+    .map(([key, zip]) => zip);
+}
+
+/**
+ * Process a single user for a given alert
+ */
+async function handleUserAlert(doc, alert, pay) {
+  const smtpConfig = process.env.SMTP2GO_API_KEY
+  
+  if (!smtpConfig || !smtpConfig.api_key) {
+    console.error("❌ SMTP config missing! Run: firebase functions:config:set smtp2go.api_key=YOUR_KEY");
+    return;
   }
 
-  console.log(`Searching for users in ZIP ${zip}, status=ACTIVE`);
+  const user = doc.data();
+  const name = user.name || user.email.split("@")[0];
 
-  // SMTP config
-  const smtpConfig = functions.config().smtp2go || {};
-  if (!smtpConfig.api_key) {
-    throw new functions.https.HttpsError(
-      "failed-precondition",
-      "Missing SMTP2GO API key"
-    );
+  const {
+    event,
+    severity,
+    headline,
+    description,
+    areaDesc,
+    id: alertId
+  } = alert.properties;
+
+  //  Prevent user spam — only 1 alert every 30 mins
+  const lastSent = user.lastAlertTimestamp || 0;
+  if (Date.now() - lastSent < 30 * 60 * 1000) {
+    console.log(`⏳ Skipping ${user.email} (rate limited)`);
+    return;
   }
 
-  // Get user snapshots
-  const userRef = db.collection("users");
-  const userSnap = await userRef
+  let subject = `⚠️ Weather Alert: ${event} (${severity})`;
+  let html = `
+    <h2 style="color:red;">${headline}</h2>
+    <p>${description}</p>
+    <p><b>Severity:</b> ${severity}</p>
+    <p><b>Area:</b> ${areaDesc}</p>
+  `;
+
+  //  Use Firestore transaction for payout updates
+  if (pay) {
+    subject = `🚨 Emergency Fund Released: ${event}`;
+    html += `<p><strong>$100 has been released to your emergency fund.</strong></p>`;
+
+    await db.runTransaction(async (t) => {
+      const snap = await t.get(doc.ref);
+      const balance = snap.data().balance || 0;
+      t.update(doc.ref, {
+        balance: balance + 100,
+        status: "PAID",
+        lastPayout: new Date().toISOString(),
+      });
+    });
+  }
+
+  //  Update "last alert info" to prevent spam
+  await doc.ref.update({
+    lastAlertTimestamp: Date.now(),
+    lastAlertId: alertId,
+  });
+
+  try {
+    await sendEmail(
+      smtpConfig,
+      [`${name} <${user.email}>`],
+      "Disaster Alert <subin.bista@selu.edu>",
+      subject,
+      html,
+      `${event} alert (${severity}) in ${areaDesc}. ${description}`
+    );
+    console.log(`✅ Email sent to ${user.email}`);
+  } catch (err) {
+    console.error("❌ Email failed for " + user.email, err.message);
+  }
+}
+
+/**
+ * Process all users in a ZIP for one alert
+ */
+async function handleZipAlert(zip, alert, pay) {
+  const users = await db.collection("users")
     .where("zip", "==", zip)
     .where("status", "==", "ACTIVE")
     .get();
 
-  console.log(`Found ${userSnap.size} user(s)`);
-
-  if (userSnap.empty) {
-    return { message: `No active user found in ${zip}` };
+  if (users.empty) {
+    console.log(`ℹ️ No active users found for ZIP ${zip}`);
+    return;
   }
 
-  const result = [];
-  const errors = [];
+  // Parallel + fault-tolerant email sending
+  await Promise.allSettled(
+    users.docs.map(doc => handleUserAlert(doc, alert, pay))
+  );
 
-  for (const user of userSnap.docs) {
-    const userData = user.data();
-    const email = userData.email;
+  console.log(`✅ ZIP ${zip} processed (${users.size} users)`);
+}
 
-    const name =
-      userData.name ||
-      userData.firstName ||
-      (typeof email === "string" ? email.split("@")[0] : "Customer");
+/**
+ * Shared logic for NOAA fetch and cron
+ */
+async function fetchNoaaAlertsHandler() {
+  console.log("🌤️ Fetching NOAA active alerts…");
 
-    console.log(`Processing payout for ${email}`);
+  const resp = await fetch("https://api.weather.gov/alerts/active");
+  if (!resp.ok) {
+    throw new Error(`NOAA API returned ${resp.status}: ${resp.statusText}`);
+  }
 
-    try {
-      // Update user balance + mark as paid
-      await user.ref.update({
-        balance: (userData.balance || 0) + 100,
-        status: "PAID",
-        lastPayout: new Date().toISOString(),
-      });
+  const data = await resp.json();
+  
+  if (!data.features || data.features.length === 0) {
+    console.log("ℹ️ No active alerts from NOAA");
+    return { message: "No active alerts", alertsProcessed: 0 };
+  }
 
-      // Send email
-      const emailResponse = await sendEmail(
-        smtpConfig.api_key,
-        [`${name} <${email}>`],
-        "Disaster Alert <subin.bista@selu.edu>",
-        "🚨 Flood Alert - Emergency Fund Released",
-        `
-          <h2 style="color:red;">🚨 Flood Alert</h2>
-          <p>Dear ${name},</p>
-          <p>Your micro-insurance policy has been triggered for ZIP <b>${zip}</b>.</p>
-          <p><strong>$100 has been released to your emergency fund.</strong></p>
-          <p>Current balance: $${(userData.balance || 0) + 100}</p>
-          <p>Stay safe,<br/>Disaster Alert System</p>
-        `,
-        `Dear ${name},\n\nYour policy has been triggered for ZIP ${zip}. $100 has been released to your emergency fund.\n\nCurrent balance: $${(userData.balance || 0) + 100}\n\nStay safe.`
-      );
+  console.log(`📋 Found ${data.features.length} active alerts`);
+  let processedCount = 0;
 
-      console.log(`Email sent to ${email}`, emailResponse);
-      result.push(email);
-    } catch (err) {
-      console.error(`❌ Failed to process ${email}:`, err);
-      errors.push({
-        email,
-        error: err.message || "Unknown error",
-      });
+  for (const alert of data.features) {
+    const { id: alertId, severity, areaDesc } = alert.properties;
+
+    // Prevent duplicate payouts/emails
+    const processed = await db.collection("processedAlerts").doc(alertId).get();
+    if (processed.exists) {
+      console.log(`⏭️ Skipping known alert: ${alertId}`);
+      continue;
     }
+
+    // Mark alert as processed early (avoid race conditions)
+    await db.collection("processedAlerts").doc(alertId).set({
+      processedAt: admin.firestore.FieldValue.serverTimestamp(),
+      severity,
+      areaDesc
+    });
+
+    const zips = mapAreaToZips(areaDesc);
+    console.log(`📍 Alert ${alertId} mapped to ${zips.length} ZIPs`);
+
+    for (const zip of zips) {
+      const pay = shouldSendPayout(severity);
+      await handleZipAlert(zip, alert, pay);
+    }
+    
+    processedCount++;
   }
+
+  return { 
+    message: `Processed ${processedCount} new alerts`, 
+    alertsProcessed: processedCount 
+  };
+}
+
+/**
+ * HTTP trigger - Fetches real NOAA alerts and sends emails
+ */
+exports.fetchNoaaAlerts = functions.https.onRequest(async (req, res) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  
+  if (req.method === 'OPTIONS') {
+    res.set('Access-Control-Allow-Methods', 'GET, POST');
+    res.set('Access-Control-Allow-Headers', 'Content-Type');
+    res.status(204).send('');
+    return;
+  }
+
+  try {
+    console.log("🚀 fetchNoaaAlerts HTTP endpoint called");
+    const result = await fetchNoaaAlertsHandler();
+    res.status(200).json({
+      success: true,
+      ...result,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error("❌ Error in fetchNoaaAlerts:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * DEMO ENDPOINT - Simulate a disaster for any ZIP code
+ * Usage: GET/POST with ?zip=70401&severity=Extreme
+ */
+exports.simulateDisaster = functions.https.onRequest(async (req, res) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  
+  if (req.method === 'OPTIONS') {
+    res.set('Access-Control-Allow-Methods', 'GET, POST');
+    res.set('Access-Control-Allow-Headers', 'Content-Type');
+    res.status(204).send('');
+    return;
+  }
+
+  try {
+    // Get ZIP from query params or body
+    const zip = req.query.zip || req.body?.zip || "70401"; // Default: Hammond, LA
+    const severity = req.query.severity || req.body?.severity || "Extreme";
+    const event = req.query.event || req.body?.event || "Hurricane";
+
+    console.log(`🎭 Simulating ${event} (${severity}) for ZIP ${zip}`);
+
+    // Create fake alert
+    const fakeAlert = {
+      properties: {
+        id: "demo-" + Date.now(),
+        event: event,
+        severity: severity,
+        areaDesc: zipToCounty[zip] || `Area for ZIP ${zip}`,
+        headline: `${event} Warning - Emergency Alert System Activated`,
+        description: `This is a SIMULATED ${event} alert for demonstration purposes. A ${severity.toLowerCase()} weather event has been detected in your area. Immediate action is recommended. Take shelter and follow emergency protocols.`,
+      },
+    };
+
+    const pay = shouldSendPayout(severity);
+    await handleZipAlert(zip, fakeAlert, pay);
+
+    res.status(200).json({
+      success: true,
+      message: `Simulated ${event} alert processed for ZIP ${zip}`,
+      payoutSent: pay,
+      severity: severity,
+      affectedZip: zip,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error("❌ Error in simulateDisaster:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * TEST ENDPOINT - Check which users would be notified for a ZIP
+ * Doesn't send emails, just returns info
+ */
+exports.checkUsers = functions.https.onRequest(async (req, res) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  
+  if (req.method === 'OPTIONS') {
+    res.set('Access-Control-Allow-Methods', 'GET');
+    res.set('Access-Control-Allow-Headers', 'Content-Type');
+    res.status(204).send('');
+    return;
+  }
+
+  try {
+    const zip = req.query.zip || "70401";
+    
+    const users = await db.collection("users")
+      .where("zip", "==", zip)
+      .where("status", "==", "ACTIVE")
+      .get();
+
+    const userList = users.docs.map(doc => {
+      const data = doc.data();
+      return {
+        email: data.email,
+        name: data.name,
+        balance: data.balance || 0,
+        lastAlert: data.lastAlertTimestamp 
+          ? new Date(data.lastAlertTimestamp).toISOString() 
+          : "Never"
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      zip: zip,
+      userCount: userList.length,
+      users: userList,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error("❌ Error in checkUsers:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * Manual simulation (callable from frontend) - For testing with specific ZIP
+ */
+exports.disaster = functions.https.onCall(async (data, context) => {
+  const { zip, severity = "Extreme" } = data;
+
+  if (!zip) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "ZIP code is required"
+    );
+  }
+
+  const fakeAlert = {
+    properties: {
+      id: "sim-" + Date.now(),
+      event: data.event || "Simulated Disaster",
+      severity,
+      areaDesc: data.areaDesc || zipToCounty[zip] || "Unknown",
+      headline: data.headline || `Test Alert for ZIP ${zip}`,
+      description: data.description || "Simulated alert.",
+    },
+  };
+
+  const pay = shouldSendPayout(severity);
+  await handleZipAlert(zip, fakeAlert, pay);
 
   return {
-    message: `Triggered payouts for ${result.length} user(s).`,
-    emails: result,
-    errors: errors.length > 0 ? errors : undefined,
+    message: `Simulated alert processed for ZIP ${zip}`,
+    payoutSent: pay,
   };
 });
