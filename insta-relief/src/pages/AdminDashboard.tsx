@@ -529,19 +529,20 @@ export default function AdminDashboard() {
                       </TableCell>
                       <TableCell>
                         <Button
-                          size="small"
-                          onClick={() => {
-                            const newBalance = prompt(
-                              `Enter new balance for ${user.firstName} ${user.lastName}:`,
-                              (user.balance ?? 0).toString()
-                            );
-                            if (newBalance !== null) {
-                              handleUpdateBalance(user.id, parseFloat(newBalance));
-                            }
-                          }}
-                        >
-                          Update Balance
-                        </Button>
+  size="small"
+  onClick={() => {
+    const newBalance = prompt(
+      `Enter new balance for ${user.firstName} ${user.lastName}:`,
+      (user.balance ?? 0).toString()
+    );
+    if (newBalance !== null) {
+      handleUpdateBalance(user.id, parseFloat(newBalance));
+    }
+  }}
+  disabled={submitting}
+>
+  Update Balance
+</Button>
                       </TableCell>
                     </TableRow>
                   ))}
