@@ -18,26 +18,7 @@ import {
   Link,
   Chip,
 } from "@mui/material";
-import { useEffect, useState } from "react";
-import {
-  Box,
-  Button,
-  Card,
-  CardContent,
-  CircularProgress,
-  Container,
-  Stack,
-  Typography,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Paper,
-  Link,
-  Chip,
-} from "@mui/material";
+
 import { useNavigate } from "react-router-dom";
 import { auth, db } from "../firebase";
 import { doc, getDoc, collection, query, getDocs, orderBy } from "firebase/firestore";
@@ -69,10 +50,7 @@ interface Transaction {
 }
 
 export default function DashboardPage() {
-  const [userData, setUserData] = useState<UserData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [userData, setUserData] = useState<UserData | null>(null);
+ const [userData, setUserData] = useState<UserData | null>(null);
   const [loading, setLoading] = useState(true);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const navigate = useNavigate();
@@ -111,35 +89,35 @@ export default function DashboardPage() {
     }
   };
 
-  useEffect(() => {
-    const fetchUserData = async () => {
-      const currentUser = auth.currentUser;
-      if (!currentUser) {
-        alert("Please log in first.");
-        navigate("/login");
-        return;
-      }
+ useEffect(() => {
+  const unsubscribe = auth.onAuthStateChanged(async (currentUser) => {
+    if (!currentUser) {
+      navigate("/");
+      return;
+    }
 
-      try {
-        const docRef = doc(db, "users", currentUser.uid);
-        const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
-          const data = docSnap.data() as UserData;
-          setUserData(data);
-          await fetchTransactions(data.zip);
-        } else {
-          alert("User data not found.");
-        }
-      } catch (error) {
-        console.error(error);
-        alert("Failed to load user data.");
-      } finally {
-        setLoading(false);
-      }
-    };
+    try {
+      const docRef = doc(db, "users", currentUser.uid);
+      const docSnap = await getDoc(docRef);
 
-    fetchUserData();
-  }, [navigate]);
+      if (docSnap.exists()) {
+        const data = docSnap.data() as UserData;
+        setUserData(data);
+        await fetchTransactions(data.zip);
+      } else {
+        alert("User data not found.");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Failed to load user data.");
+    } finally {
+      setLoading(false);
+    }
+  });
+
+  return () => unsubscribe();
+}, [navigate]);
+
 
   const handleLogout = async () => {
     await signOut(auth);
