@@ -90,8 +90,6 @@ export default function AdminDashboard() {
   }>({ show: false, current: 0, total: 0 });
   const navigate = useNavigate();
 
-  // ✅ REPLACE THIS WITH YOUR ACTUAL CLOUD FUNCTION URL
-  // Example: https://us-central1-your-project-id.cloudfunctions.net/adminAgent
   const AI_FUNCTION_URL = "https://adminagent-eelyy5nzaa-uc.a.run.app";
   useEffect(() => {
     const checkAdminAndFetchData = async () => {
@@ -205,7 +203,7 @@ export default function AdminDashboard() {
     const amountSOL = conversion.solAmount;
 
     const confirmed = window.confirm(
-      `💰 SEND SOL PAYMENT\n\n` +
+      ` SEND SOL PAYMENT\n\n` +
       `This will send real cryptocurrency to ${user.firstName} ${user.lastName}.\n\n` +
       `Amount: $${difference.toFixed(2)} (${amountSOL.toFixed(4)} SOL)\n` +
       `To: ${user.walletAddress.slice(0, 8)}...${user.walletAddress.slice(-8)}\n\n` +
@@ -223,7 +221,7 @@ export default function AdminDashboard() {
       amountSOL
     );
 
-    console.log(`✅ Sent ${amountSOL.toFixed(4)} SOL to ${user.email}`, explorerUrl);
+    console.log(`Sent ${amountSOL.toFixed(4)} SOL to ${user.email}`, explorerUrl);
 
     // Update Firestore balance
     await updateDoc(doc(db, "users", userId), {
@@ -247,9 +245,8 @@ export default function AdminDashboard() {
   }
 };
 
-  // ✅ NEW: Handle AI-prepared catastrophe data
   const handleAIPreparedCatastrophe = (aiData: any) => {
-    console.log("🤖 AI prepared catastrophe data:", aiData);
+    console.log(" AI prepared catastrophe data:", aiData);
     
     // Auto-fill the catastrophe dialog with AI data
     setCatastropheData({
@@ -266,7 +263,7 @@ export default function AdminDashboard() {
     // Show success message
     setMessage({
       type: "success",
-      text: `✅ AI auto-filled catastrophe form! ${aiData.analysis?.usersWithWallet || 0} users ready. Review and confirm to execute.`,
+      text: ` AI auto-filled catastrophe form! ${aiData.analysis?.usersWithWallet || 0} users ready. Review and confirm to execute.`,
     });
 
     // Scroll to top to see the dialog
