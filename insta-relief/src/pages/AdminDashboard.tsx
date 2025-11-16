@@ -212,7 +212,6 @@ export default function AdminDashboard() {
       const conversion = await convertUSDtoSOL(difference, 2);
       const amountSOL = conversion.solAmount;
 
-      // Open confirmation dialog
       setPaymentConfirmDialog({
         open: true,
         user,
@@ -225,46 +224,53 @@ export default function AdminDashboard() {
       setMessage({ type: "error", text: `Failed to prepare payment: ${error.message}` });
     }
   };
+const handleConfirmPayment = async () => {
+  if (!paymentConfirmDialog.user || !paymentConfirmDialog.amountSOL) return;
 
-  const handleConfirmPayment = async () => {
-    if (!paymentConfirmDialog.user || !paymentConfirmDialog.amountSOL) return;
+  const { user, amountUSD, amountSOL, newBalance } = paymentConfirmDialog;
 
-    const { user, amountUSD, amountSOL, newBalance } = paymentConfirmDialog;
+  try {
+    setSubmitting(true);
+    setPaymentConfirmDialog({ open: false });
 
-    try {
-      setSubmitting(true);
-      setPaymentConfirmDialog({ open: false });
+    const { signature, explorerUrl } = await sendSol(
+      user.walletAddress!,
+      amountSOL
+    );
 
-      // Send the SOL
-      const { signature, explorerUrl } = await sendSol(
-        user.walletAddress!,
-        amountSOL
-      );
+    console.log(`Sent ${amountSOL.toFixed(4)} SOL to ${user.email}`, explorerUrl);
 
-      console.log(`✅ Sent ${amountSOL.toFixed(4)} SOL to ${user.email}`, explorerUrl);
+    await updateDoc(doc(db, "users", user.id), {
+      balance: newBalance,
+      lastPayout: new Date().toISOString(),
+      lastPayoutAmount: amountUSD,
+      status: "PAID",
+    });
 
-      // Update Firestore balance
-      await updateDoc(doc(db, "users", user.id), {
-        balance: newBalance,
-        lastPayout: new Date().toISOString(),
-        lastPayoutAmount: amountUSD,
-        status: "PAID",
-      });
+    setMessage({ 
+      type: "success", 
+      text: `Successfully sent ${amountSOL.toFixed(4)} SOL ($${amountUSD?.toFixed(2)})! View transaction: ${explorerUrl}` 
+    });
 
+    await fetchUsers();
+  } catch (error: any) {
+    console.error("Payment error:", error);
+    
+    if (error.message?.includes("cancelled") || error.message?.includes("rejected")) {
       setMessage({ 
-        type: "success", 
-        text: `Successfully sent ${amountSOL.toFixed(4)} SOL ($${amountUSD?.toFixed(2)})! View transaction: ${explorerUrl}` 
+        type: "error", 
+        text: "Transaction cancelled by user." 
       });
-
-      await fetchUsers();
-    } catch (error: any) {
-      console.error(error);
-      setMessage({ type: "error", text: `Failed to send payment: ${error.message}` });
-    } finally {
-      setSubmitting(false);
+    } else {
+      setMessage({ 
+        type: "error", 
+        text: `Failed to send payment: ${error.message}. Balance was not updated.` 
+      });
     }
-  };
-
+  } finally {
+    setSubmitting(false);
+  }
+};
   const handleAIPreparedCatastrophe = (aiData: any) => {
     console.log("AI prepared catastrophe data:", aiData);
     
@@ -348,7 +354,6 @@ export default function AdminDashboard() {
       }
 
       const estimatedTotalSOL = affectedUsers.length * amountSOL;
-      console.log(`💰 Estimated total cost: ${estimatedTotalSOL.toFixed(4)} SOL for ${affectedUsers.length} users`);
 
       const payoutResults = [];
       for (let i = 0; i < affectedUsers.length; i++) {
@@ -382,9 +387,7 @@ export default function AdminDashboard() {
             explorerUrl,
           });
 
-          console.log(`✅ Sent ${amountSOL} SOL to ${user.email}`, explorerUrl);
         } catch (error: any) {
-          console.error(`❌ Failed to send to ${user.email}:`, error);
           payoutResults.push({
             userId: user.id,
             email: user.email,
