@@ -1,10 +1,16 @@
+require("dotenv").config();   // At the very top
+
 const functions = require("firebase-functions");
 const admin = require("firebase-admin");
-const {Anthropic} = require("@anthropic-ai/sdk");
+const { Anthropic } = require("@anthropic-ai/sdk");
 
 admin.initializeApp();
 
 const db = admin.firestore();
+
+const anthropic = new Anthropic({
+  apiKey: process.env.CLAUDE_API_KEY,
+});
 
 async function sendEmail(apiKey, to, sender, subject, htmlBody, textBody) {
   const response = await fetch("https://api.smtp2go.com/v3/email/send", {
@@ -30,8 +36,10 @@ async function sendEmail(apiKey, to, sender, subject, htmlBody, textBody) {
   return response.json();
 }
 
+// Your disaster function
 exports.disaster = functions.https.onCall(async (request, context) => {
   const zip = request.data.zip;
+
   if (!zip) {
     throw new functions.https.HttpsError(
       "invalid-argument",
@@ -41,11 +49,11 @@ exports.disaster = functions.https.onCall(async (request, context) => {
 
   console.log(`Looking for users in ${zip}`);
 
-  const smtpConfig = functions.config().smtp2go || {};
-  if (!smtpConfig.api_key) {
+  const smtpApiKey = process.env.SMTP2GO_API_KEY;
+  if (!smtpApiKey) {
     throw new functions.https.HttpsError(
       "failed-precondition",
-      "Missing SMTP API key"
+      "Missing SMTP2GO_API_KEY in .env"
     );
   }
 
@@ -65,10 +73,7 @@ exports.disaster = functions.https.onCall(async (request, context) => {
   for (const user of userSnap.docs) {
     const userData = user.data();
     const email = userData.email;
-    const name =
-      userData.name ||
-      userData.firstName ||
-      email.split("@")[0];
+    const name = userData.name || userData.firstName || email.split("@")[0];
 
     try {
       await user.ref.update({
@@ -78,9 +83,9 @@ exports.disaster = functions.https.onCall(async (request, context) => {
       });
 
       await sendEmail(
-        smtpConfig.api_key,
+        smtpApiKey,
         [`${name} <${email}>`],
-        "Disaster Alert <your@email>",
+        "Disaster Alert <no-reply@example.com>",
         "🚨 Flood Alert - Emergency Fund Released",
         `<h2>Flood Alert</h2><p>$100 added.</p>`,
         `Flood Alert: $100 added.`
@@ -99,14 +104,6 @@ exports.disaster = functions.https.onCall(async (request, context) => {
   };
 });
 
-// ===================================================================
-// ⭐ NEW — CLAUDE AI ADMIN AGENT
-// ===================================================================
-
-const anthropic = new Anthropic({
-  apiKey: process.env.CLAUDE_API_KEY,
-});
-
 exports.adminAgent = functions.https.onRequest(async (req, res) => {
   res.set("Access-Control-Allow-Origin", "*");
 
@@ -118,18 +115,13 @@ exports.adminAgent = functions.https.onRequest(async (req, res) => {
     }
 
     const response = await anthropic.messages.create({
-      model: "claude-3-5-sonnet",
+      model: "claude-sonnet-4-5-20250929",
       max_tokens: 600,
+      system: `You are the Admin Automation Agent.
+You help create fake disaster scenarios,
+analyze data, and support admin workflows.
+Always output clean JSON when possible.`,
       messages: [
-        {
-          role: "system",
-          content: `
-            You are the Admin Automation Agent.
-            You help create fake disaster scenarios,
-            analyze data, and support admin workflows.
-            Always output clean JSON when possible.
-          `
-        },
         {
           role: "user",
           content: query
