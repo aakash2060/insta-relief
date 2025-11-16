@@ -38,6 +38,7 @@ import {
 } from "firebase/firestore";
 import { signOut } from "firebase/auth";
 import AdminWalletConnect from "../components/AdminWalletConnect";
+import AIAssistant from "../components/AIAssistant";
 import { sendSol, getProvider } from "../lib/solana";
 import { convertUSDtoSOL } from "../lib/priceService";
 
@@ -89,6 +90,9 @@ export default function AdminDashboard() {
   }>({ show: false, current: 0, total: 0 });
   const navigate = useNavigate();
 
+  // ✅ REPLACE THIS WITH YOUR ACTUAL CLOUD FUNCTION URL
+  // Example: https://us-central1-your-project-id.cloudfunctions.net/adminAgent
+  const AI_FUNCTION_URL = "https://adminagent-eelyy5nzaa-uc.a.run.app";
   useEffect(() => {
     const checkAdminAndFetchData = async () => {
       const currentUser = auth.currentUser;
@@ -161,6 +165,32 @@ export default function AdminDashboard() {
       console.error(error);
       setMessage({ type: "error", text: "Failed to update balance." });
     }
+  };
+
+  // ✅ NEW: Handle AI-prepared catastrophe data
+  const handleAIPreparedCatastrophe = (aiData: any) => {
+    console.log("🤖 AI prepared catastrophe data:", aiData);
+    
+    // Auto-fill the catastrophe dialog with AI data
+    setCatastropheData({
+      type: aiData.formData.type,
+      location: aiData.formData.location,
+      zipCodes: aiData.formData.zipCodes,
+      amount: aiData.formData.amount,
+      description: aiData.formData.description || "",
+    });
+    
+    // Open the catastrophe dialog
+    setOpenCatastropheDialog(true);
+    
+    // Show success message
+    setMessage({
+      type: "success",
+      text: `✅ AI auto-filled catastrophe form! ${aiData.analysis?.usersWithWallet || 0} users ready. Review and confirm to execute.`,
+    });
+
+    // Scroll to top to see the dialog
+    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const handleConfirmTrigger = () => {
@@ -366,13 +396,16 @@ export default function AdminDashboard() {
         </Alert>
       )}
 
+      {/* ✅ TABS: Users, Catastrophes, AI Assistant */}
       <Box sx={{ borderBottom: 1, borderColor: "divider", mb: 3 }}>
         <Tabs value={tabValue} onChange={(_, newValue) => setTabValue(newValue)}>
           <Tab label={`Users (${users.length})`} />
           <Tab label={`Catastrophes (${catastrophes.length})`} />
+          <Tab label="🤖 AI Assistant" />
         </Tabs>
       </Box>
 
+      {/* ========== TAB 0: USERS TABLE ========== */}
       {tabValue === 0 && (
         <Card>
           <CardContent>
@@ -389,6 +422,7 @@ export default function AdminDashboard() {
                     <TableCell><strong>ZIP</strong></TableCell>
                     <TableCell><strong>Status</strong></TableCell>
                     <TableCell><strong>Balance</strong></TableCell>
+                    <TableCell><strong>Wallet</strong></TableCell>
                     <TableCell><strong>Actions</strong></TableCell>
                   </TableRow>
                 </TableHead>
@@ -410,12 +444,19 @@ export default function AdminDashboard() {
                       </TableCell>
                       <TableCell>${(user.balance ?? 0).toFixed(2)}</TableCell>
                       <TableCell>
+                        {user.walletAddress ? (
+                          <Chip label="Connected" color="success" size="small" />
+                        ) : (
+                          <Chip label="No Wallet" color="default" size="small" />
+                        )}
+                      </TableCell>
+                      <TableCell>
                         <Button
                           size="small"
                           onClick={() => {
                             const newBalance = prompt(
                               `Enter new balance for ${user.firstName} ${user.lastName}:`,
-(user.balance ?? 0).toString()
+                              (user.balance ?? 0).toString()
                             );
                             if (newBalance !== null) {
                               handleUpdateBalance(user.id, parseFloat(newBalance));
@@ -434,6 +475,7 @@ export default function AdminDashboard() {
         </Card>
       )}
 
+      {/* ========== TAB 1: CATASTROPHES TABLE ========== */}
       {tabValue === 1 && (
         <Card>
           <CardContent>
@@ -474,6 +516,15 @@ export default function AdminDashboard() {
         </Card>
       )}
 
+      {/* ========== TAB 2: AI ASSISTANT ========== */}
+      {tabValue === 2 && (
+        <AIAssistant
+          functionUrl={AI_FUNCTION_URL}
+          onCatastrophePrepared={handleAIPreparedCatastrophe}
+        />
+      )}
+
+      {/* ========== CATASTROPHE DIALOG ========== */}
       <Dialog
         open={openCatastropheDialog}
         onClose={() => setOpenCatastropheDialog(false)}
@@ -547,6 +598,7 @@ export default function AdminDashboard() {
         </DialogActions>
       </Dialog>
 
+      {/* ========== PROCESSING DIALOG ========== */}
       <Dialog open={processingStatus.show} maxWidth="sm" fullWidth>
         <DialogContent>
           <Stack spacing={2} alignItems="center" sx={{ py: 3 }}>
