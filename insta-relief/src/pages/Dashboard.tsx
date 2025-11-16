@@ -24,6 +24,10 @@ import { auth, db } from "../firebase";
 import { doc, getDoc, collection, query, getDocs, orderBy } from "firebase/firestore";
 import { signOut } from "firebase/auth";
 
+// COMPONENTS
+import Navbar from "../components/Navbar";
+import Footer from "../components/Footer";
+
 interface UserData {
   firstName: string;
   lastName: string;
@@ -47,80 +51,76 @@ interface Transaction {
   status: string;
   signature?: string;
   explorerUrl?: string;
-          exchangeRate?: number;
-
+  exchangeRate?: number;
 }
 
 export default function DashboardPage() {
- const [userData, setUserData] = useState<UserData | null>(null);
+  const [userData, setUserData] = useState<UserData | null>(null);
   const [loading, setLoading] = useState(true);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const navigate = useNavigate();
 
   const fetchTransactions = async (userZip: string) => {
     try {
-      const catastrophesRef = collection(db, "catastrophes");
-      const q = query(catastrophesRef, orderBy("createdAt", "desc"));
-      const querySnapshot = await getDocs(q);
-      
-      const userTransactions: Transaction[] = [];
-      querySnapshot.forEach((doc) => {
-        const data = doc.data();
-        if (data.zipCodes && data.zipCodes.includes(userZip)) {
-          const payoutResult = data.payoutResults?.find(
+      const ref = collection(db, "catastrophes");
+      const q = query(ref, orderBy("createdAt", "desc"));
+      const snap = await getDocs(q);
+
+      const list: Transaction[] = [];
+      snap.forEach((doc) => {
+        const d = doc.data();
+        if (d.zipCodes?.includes(userZip)) {
+          const result = d.payoutResults?.find(
             (r: any) => r.email === auth.currentUser?.email
           );
-          
-          userTransactions.push({
+
+          list.push({
             id: doc.id,
-            type: data.type,
-            location: data.location,
-            amount: data.amount,
-            amountSOL: data.amountSOL,
-            exchangeRate: data.exchangeRate,
-            createdAt: data.createdAt,
-            status: payoutResult?.success ? "Completed" : "Failed",
-            signature: payoutResult?.signature,
-            explorerUrl: payoutResult?.explorerUrl,
+            type: d.type,
+            location: d.location,
+            amount: d.amount,
+            amountSOL: d.amountSOL,
+            exchangeRate: d.exchangeRate,
+            createdAt: d.createdAt,
+            status: result?.success ? "Completed" : "Failed",
+            signature: result?.signature,
+            explorerUrl: result?.explorerUrl,
           });
         }
       });
-      
-      setTransactions(userTransactions);
-    } catch (error) {
-      console.error("Error fetching transactions:", error);
+
+      setTransactions(list);
+    } catch (e) {
+      console.error(e);
     }
   };
 
- useEffect(() => {
-  const unsubscribe = auth.onAuthStateChanged(async (currentUser) => {
-    if (!currentUser) {
-      navigate("/");
-      return;
-    }
-
-    try {
-      const docRef = doc(db, "users", currentUser.uid);
-      const docSnap = await getDoc(docRef);
-
-      if (docSnap.exists()) {
-        const data = docSnap.data() as UserData;
-        setUserData(data);
-        await fetchTransactions(data.zip);
-      } else {
-        alert("User data not found.");
+  useEffect(() => {
+    const unsub = auth.onAuthStateChanged(async (user) => {
+      if (!user) {
+        navigate("/");
+        return;
       }
-    } catch (err) {
-      console.error(err);
-      alert("Failed to load user data.");
-    } finally {
-      setLoading(false);
-    }
-  });
 
-  return () => unsubscribe();
-}, [navigate]);
+      try {
+        const ref = doc(db, "users", user.uid);
+        const snap = await getDoc(ref);
 
+        if (snap.exists()) {
+          const data = snap.data() as UserData;
+          setUserData(data);
+          await fetchTransactions(data.zip);
+        }
+      } catch (e) {
+        console.error(e);
+        alert("Failed to load data");
+      } finally {
+        setLoading(false);
+      }
+    });
+
+    return () => unsub();
+  }, [navigate]);
 
   const handleLogout = async () => {
     await signOut(auth);
@@ -147,156 +147,208 @@ export default function DashboardPage() {
   const isActive = userData.status === "ACTIVE";
 
   return (
-    <Container maxWidth="lg" sx={{ py: 4 }}>
-      <Stack spacing={4}>
-        <Card
-          sx={{
-            p: 4,
-            borderRadius: 4,
-            backgroundColor: (theme) =>
-              theme.palette.mode === "dark" ? "#0B0E11" : "#F8FAFC",
-            boxShadow: "0 6px 18px rgba(0,0,0,0.15)",
-          }}
-        >
-          <CardContent>
-            <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 3 }}>
-              <Typography
-                variant="h4"
-                sx={{ fontWeight: 700, color: "primary.main" }}
-              >
-                Your Policy Dashboard
-              </Typography>
-              <Button variant="outlined" onClick={handleLogout}>
-                Logout
-              </Button>
-            </Stack>
+    <>
+      <Navbar />
 
-            <Stack spacing={1.2} sx={{ mb: 4 }} alignItems="center">
-              <Typography variant="h6">
-                {userData.firstName} {userData.lastName}
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                {userData.email}
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                ZIP Code: {userData.zip}
-              </Typography>
-              {userData.walletAddress && (
-                <Typography variant="body2" color="text.secondary">
-                  Wallet: {userData.walletAddress.slice(0, 8)}...{userData.walletAddress.slice(-8)}
+      <Container maxWidth="lg" sx={{ py: 5 }}>
+        <Stack spacing={4}>
+
+          {/* HEADER CARD */}
+          <Card
+            sx={{
+              p: 4,
+              borderRadius: 4,
+              background: (theme) =>
+                theme.palette.mode === "dark"
+                  ? "linear-gradient(135deg, #0f172a, #1e293b)"
+                  : "#F8FAFC",
+              boxShadow: "0px 12px 35px rgba(0, 0, 0, 0.4)",
+              border: "1px solid rgba(255,255,255,0.06)",
+            }}
+          >
+            <CardContent>
+              <Stack direction="row" justifyContent="space-between" alignItems="center">
+                <Typography
+                  variant="h4"
+                  sx={{
+                    fontWeight: 900,
+                    letterSpacing: 0.5,
+                    background: "linear-gradient(90deg, #60A5FA, #A78BFA)",
+                    WebkitBackgroundClip: "text",
+                    WebkitTextFillColor: "transparent",
+                  }}
+                >
+                  Policy Dashboard
                 </Typography>
-              )}
-            </Stack>
 
-            <Box
-              sx={{
-                p: 3,
-                borderRadius: 3,
-                backgroundColor: isActive
-                  ? "rgba(14,159,110,0.15)"
-                  : "rgba(251,191,36,0.15)",
-                textAlign: "center",
-                mb: 2,
-                transition: "0.3s ease",
-              }}
-            >
-              <Typography
-                variant="h6"
+                <Button
+                  variant="outlined"
+                  onClick={handleLogout}
+                  sx={{
+                    color: "#93C5FD",
+                    borderColor: "#93C5FD",
+                    px: 2.5,
+                    fontWeight: 600,
+                    "&:hover": {
+                      borderColor: "#A5B4FC",
+                      color: "#A5B4FC",
+                    },
+                  }}
+                >
+                  Logout
+                </Button>
+              </Stack>
+
+              {/* USER INFO */}
+              <Stack spacing={1.2} alignItems="center" sx={{ mt: 3, mb: 3 }}>
+                <Typography variant="h6" sx={{ fontWeight: 700 }}>
+                  {userData.firstName} {userData.lastName}
+                </Typography>
+
+                <Typography variant="body2" color="text.secondary">
+                  {userData.email}
+                </Typography>
+
+                <Typography variant="body2" color="text.secondary">
+                  ZIP Code: {userData.zip}
+                </Typography>
+
+                {userData.walletAddress && (
+                  <Typography variant="body2" color="text.secondary">
+                    Wallet: {userData.walletAddress.slice(0, 8)}...
+                    {userData.walletAddress.slice(-8)}
+                  </Typography>
+                )}
+              </Stack>
+
+              {/* STATUS + BALANCE */}
+              <Box
                 sx={{
-                  fontWeight: 700,
-                  color: isActive ? "success.main" : "warning.main",
-                  mb: 1,
+                  p: 3,
+                  borderRadius: 3,
+                  background: isActive
+                    ? "rgba(16,185,129,0.12)"
+                    : "rgba(245,158,11,0.12)",
+                  textAlign: "center",
+                  backdropFilter: "blur(8px)",
+                  border: "1px solid rgba(255,255,255,0.08)",
                 }}
               >
-                Status: {userData.status}
+                <Typography
+                  variant="h6"
+                  sx={{
+                    fontWeight: 800,
+                    color: isActive ? "success.main" : "warning.main",
+                    mb: 1,
+                  }}
+                >
+                  Status: {userData.status}
+                </Typography>
+
+                <Typography variant="body1">
+                  Policy ID:&nbsp;
+                  <strong style={{ color: "#60A5FA" }}>
+                    {userData.policyId}
+                  </strong>
+                </Typography>
+
+                <Typography variant="body1" sx={{ mt: 0.5 }}>
+                  Emergency Fund Balance:&nbsp;
+                  <strong style={{ color: "#10B981", fontSize: "1.2rem" }}>
+                    ${userData.balance.toFixed(2)}
+                  </strong>
+                </Typography>
+              </Box>
+            </CardContent>
+          </Card>
+
+          {/* TRANSACTION HISTORY */}
+          <Card
+            sx={{
+              borderRadius: 4,
+              background: (theme) =>
+                theme.palette.mode === "dark"
+                  ? "linear-gradient(145deg, #111827, #1f2937)"
+                  : "#FFFFFF",
+              boxShadow: "0px 10px 30px rgba(0,0,0,0.35)",
+              border: "1px solid rgba(255,255,255,0.06)",
+            }}
+          >
+            <CardContent>
+              <Typography variant="h6" sx={{ mb: 3, fontWeight: 700 }}>
+                Transaction History
               </Typography>
 
-              <Typography variant="body1" sx={{ mb: 0.5 }}>
-                Policy ID:&nbsp;
-                <strong style={{ color: "#1E3A8A" }}>{userData.policyId}</strong>
-              </Typography>
-
-              <Typography variant="body1">
-                Emergency Fund Balance:&nbsp;
-                <strong style={{ color: "#0E9F6E" }}>
-                  ${userData.balance.toFixed(2)}
-                </strong>
-              </Typography>
-            </Box>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent>
-            <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
-              Transaction History
-            </Typography>
-            
-            {transactions.length === 0 ? (
-              <Typography variant="body2" color="text.secondary">
-                No transactions yet. You'll see payouts here when catastrophes affect your area.
-              </Typography>
-            ) : (
-              <TableContainer component={Paper} variant="outlined">
-                <Table>
-                  <TableHead>
-                    <TableRow>
-                      <TableCell><strong>Date</strong></TableCell>
-                      <TableCell><strong>Event Type</strong></TableCell>
-                      <TableCell><strong>Location</strong></TableCell>
-                      <TableCell><strong>Amount (USD)</strong></TableCell>
-                      <TableCell><strong>Amount (SOL)</strong></TableCell>
-                      <TableCell><strong>Status</strong></TableCell>
-                      <TableCell><strong>Blockchain</strong></TableCell>
-                      <TableCell><strong>Exchange Rate</strong></TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {transactions.map((tx) => (
-                      <TableRow key={tx.id}>
-                        <TableCell>
-                          {new Date(tx.createdAt).toLocaleDateString()}
-                        </TableCell>
-                        <TableCell>{tx.type}</TableCell>
-                        <TableCell>{tx.location}</TableCell>
-                        <TableCell>${tx.amount.toFixed(2)}</TableCell>
-                        <TableCell>{tx.amountSOL ? tx.amountSOL.toFixed(4) : '0.0000'} SOL</TableCell>
-                        <TableCell>
-                          <Chip
-                            label={tx.status}
-                            color={tx.status === "Completed" ? "success" : "error"}
-                            size="small"
-                          />
-                        </TableCell>
-                        <TableCell>
-                          {tx.explorerUrl ? (
-                            <Link
-                              href={tx.explorerUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              sx={{ fontSize: "0.875rem" }}
-                            >
-                              View on Explorer
-                            </Link>
-                          ) : (
-                            <Typography variant="caption" color="text.secondary">
-                              N/A
-                            </Typography>
-                          )}
-         
-                        </TableCell>
-                                         <TableCell>
-  {tx.exchangeRate ? `$${tx.exchangeRate.toFixed(2)}/SOL` : 'N/A'}
-</TableCell>
+              {transactions.length === 0 ? (
+                <Typography variant="body2" color="text.secondary">
+                  No transactions yet. You’ll see payouts here when catastrophes affect your area.
+                </Typography>
+              ) : (
+                <TableContainer component={Paper} variant="outlined">
+                  <Table>
+                    <TableHead>
+                      <TableRow>
+                        <TableCell><strong>Date</strong></TableCell>
+                        <TableCell><strong>Event Type</strong></TableCell>
+                        <TableCell><strong>Location</strong></TableCell>
+                        <TableCell><strong>Amount (USD)</strong></TableCell>
+                        <TableCell><strong>Amount (SOL)</strong></TableCell>
+                        <TableCell><strong>Status</strong></TableCell>
+                        <TableCell><strong>Blockchain</strong></TableCell>
+                        <TableCell><strong>Exchange Rate</strong></TableCell>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-            )}
-          </CardContent>
-        </Card>
-      </Stack>
-    </Container>
+                    </TableHead>
+                    <TableBody>
+                      {transactions.map((tx) => (
+                        <TableRow key={tx.id}>
+                          <TableCell>
+                            {new Date(tx.createdAt).toLocaleDateString()}
+                          </TableCell>
+                          <TableCell>{tx.type}</TableCell>
+                          <TableCell>{tx.location}</TableCell>
+                          <TableCell>${tx.amount.toFixed(2)}</TableCell>
+                          <TableCell>
+                            {tx.amountSOL ? tx.amountSOL.toFixed(4) : "0.0000"} SOL
+                          </TableCell>
+                          <TableCell>
+                            <Chip
+                              label={tx.status}
+                              color={tx.status === "Completed" ? "success" : "error"}
+                              size="small"
+                            />
+                          </TableCell>
+                          <TableCell>
+                            {tx.explorerUrl ? (
+                              <Link
+                                href={tx.explorerUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                sx={{ fontSize: "0.875rem" }}
+                              >
+                                View on Explorer
+                              </Link>
+                            ) : (
+                              <Typography variant="caption" color="text.secondary">
+                                N/A
+                              </Typography>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            {tx.exchangeRate ? `$${tx.exchangeRate.toFixed(2)}/SOL` : "N/A"}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              )}
+            </CardContent>
+          </Card>
+
+        </Stack>
+      </Container>
+
+      <Footer />
+    </>
   );
 }
