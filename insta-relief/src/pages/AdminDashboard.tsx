@@ -41,6 +41,7 @@ import AdminWalletConnect from "../components/AdminWalletConnect";
 import AIAssistant from "../components/AIAssistant";
 import { sendSol, getProvider } from "../lib/solana";
 import { convertUSDtoSOL } from "../lib/priceService";
+import NoaaMap from "../components/NoaaMap";
 
 interface UserData {
   id: string;
@@ -402,6 +403,7 @@ export default function AdminDashboard() {
           <Tab label={`Users (${users.length})`} />
           <Tab label={`Catastrophes (${catastrophes.length})`} />
           <Tab label="🤖 AI Assistant" />
+          <Tab label ="Live Map"/>
         </Tabs>
       </Box>
 
@@ -522,6 +524,13 @@ export default function AdminDashboard() {
           functionUrl={AI_FUNCTION_URL}
           onCatastrophePrepared={handleAIPreparedCatastrophe}
         />
+      )}
+      {tabValue ==3 &&(
+        <Card>
+          <CardContent>
+            <NoaaMap/>
+          </CardContent>
+        </Card>
       )}
 
       {/* ========== CATASTROPHE DIALOG ========== */}
