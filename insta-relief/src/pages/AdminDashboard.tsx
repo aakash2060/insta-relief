@@ -40,6 +40,8 @@ import { signOut } from "firebase/auth";
 import AdminWalletConnect from "../components/AdminWalletConnect";
 import AIAssistant from "../components/AIAssistant";
 import { sendSol, getProvider } from "../lib/solana";
+import { convertUSDtoSOL } from "../lib/priceService";
+
 interface UserData {
   id: string;
   firstName: string;
@@ -216,7 +218,7 @@ export default function AdminDashboard() {
 
     const provider = getProvider();
     if (!provider || !provider.publicKey) {
-      setMessage({ type: "error", text: "Please connect your Phantom wallet first." });
+      setMessage({ type: "error", text: "Please connect your Phantom wallet first!" });
       return;
     }
 
@@ -224,8 +226,9 @@ export default function AdminDashboard() {
     try {
       const zipCodesArray = catastropheData.zipCodes.split(",").map((zip) => zip.trim());
       const amountUSD = parseFloat(catastropheData.amount);
-      const amountSOL = amountUSD / 100;
-
+      const conversion = await convertUSDtoSOL(amountUSD, 2); 
+      const amountSOL = conversion.solAmount;
+      const exchangeRate = conversion.exchangeRate;
       const usersSnapshot = await getDocs(collection(db, "users"));
       const affectedUsers: any[] = [];
 
@@ -300,6 +303,8 @@ export default function AdminDashboard() {
         zipCodes: zipCodesArray,
         amount: amountUSD,
         amountSOL: amountSOL,
+        exchangeRate: exchangeRate,
+        priceTimestamp: conversion.timestamp,
         description: catastropheData.description,
         createdAt: new Date().toISOString(),
         createdBy: auth.currentUser?.email,
@@ -598,7 +603,7 @@ export default function AdminDashboard() {
               </Typography>
             )}
             <Typography variant="caption" color="warning.main">
-              Please do not close this window
+              Please don't close this window
             </Typography>
           </Stack>
         </DialogContent>
