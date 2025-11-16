@@ -279,6 +279,8 @@ export default function AdminDashboard() {
         zipCodes: zipCodesArray,
         amount: amountUSD,
         amountSOL: amountSOL,
+        exchangeRate: exchangeRate,
+        priceTimestamp: conversion.timestamp,
         description: catastropheData.description,
         createdAt: new Date().toISOString(),
         createdBy: auth.currentUser?.email,
