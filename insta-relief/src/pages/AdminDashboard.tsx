@@ -68,7 +68,7 @@ interface Catastrophe {
 }
 
 // ⚠️ IMPORTANT: Ensure this URL is correct for your environment (Deployed or Emulator)
-const SIMULATE_DISASTER_URL = "https://simulateddisaster-eelyy5nzaa-uc.a.run.app";
+const SIMULATE_DISASTER_URL = "https://simulatedisaster-eelyy5nzaa-uc.a.run.app";
 
 export default function AdminDashboard() {
   const [users, setUsers] = useState<UserData[]>([]);
