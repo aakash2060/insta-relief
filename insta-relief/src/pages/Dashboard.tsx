@@ -17,12 +17,20 @@ import {
   Paper,
   Link,
   Chip,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  TextField,
+  Alert,
 } from "@mui/material";
-
+import AccountBalanceWalletIcon from "@mui/icons-material/AccountBalanceWallet";
 import { useNavigate } from "react-router-dom";
 import { auth, db } from "../firebase";
-import { doc, getDoc, collection, query, getDocs, orderBy } from "firebase/firestore";
+import { doc, getDoc, collection, query, getDocs, orderBy, updateDoc, addDoc } from "firebase/firestore";
 import { signOut } from "firebase/auth";
+import { getProvider, sendSol } from "../lib/solana";
+import { convertUSDtoSOL } from "../lib/priceService";
 
 interface UserData {
   firstName: string;
@@ -47,14 +55,26 @@ interface Transaction {
   status: string;
   signature?: string;
   explorerUrl?: string;
-          exchangeRate?: number;
-
+  exchangeRate?: number;
 }
 
 export default function DashboardPage() {
- const [userData, setUserData] = useState<UserData | null>(null);
+  const [userData, setUserData] = useState<UserData | null>(null);
   const [loading, setLoading] = useState(true);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [withdrawDialog, setWithdrawDialog] = useState(false);
+  const [withdrawAmount, setWithdrawAmount] = useState("");
+  const [withdrawing, setWithdrawing] = useState(false);
+  const [message, setMessage] = useState<{ 
+    type: "success" | "error"; 
+    text: string;
+    explorerUrl?: string;
+  } | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<{
+    open: boolean;
+    amountUSD?: number;
+    amountSOL?: number;
+  }>({ open: false });
   const navigate = useNavigate();
 
   const fetchTransactions = async (userZip: string) => {
@@ -92,8 +112,8 @@ export default function DashboardPage() {
     }
   };
 
- useEffect(() => {
-  const unsubscribe = auth.onAuthStateChanged(async (currentUser) => {
+  const fetchUserData = async () => {
+    const currentUser = auth.currentUser;
     if (!currentUser) {
       navigate("/");
       return;
@@ -116,15 +136,152 @@ export default function DashboardPage() {
     } finally {
       setLoading(false);
     }
-  });
+  };
 
-  return () => unsubscribe();
-}, [navigate]);
+  useEffect(() => {
+    const unsubscribe = auth.onAuthStateChanged(async (currentUser) => {
+      if (!currentUser) {
+        navigate("/");
+        return;
+      }
+      await fetchUserData();
+    });
 
+    return () => unsubscribe();
+  }, [navigate]);
 
   const handleLogout = async () => {
     await signOut(auth);
     navigate("/");
+  };
+
+  const handleWithdrawClick = () => {
+    if (!userData?.walletAddress) {
+      setMessage({ 
+        type: "error", 
+        text: "No wallet connected. Please update your profile with a Solana wallet address." 
+      });
+      return;
+    }
+
+    if ((userData?.balance || 0) < 10) {
+      setMessage({ 
+        type: "error", 
+        text: "Minimum withdrawal amount is $10.00" 
+      });
+      return;
+    }
+
+    setWithdrawDialog(true);
+  };
+
+  const handleWithdrawSubmit = async () => {
+    const amount = parseFloat(withdrawAmount);
+
+    if (isNaN(amount) || amount <= 0) {
+      setMessage({ type: "error", text: "Please enter a valid amount" });
+      return;
+    }
+
+    if (amount < 10) {
+      setMessage({ type: "error", text: "Minimum withdrawal is $10.00" });
+      return;
+    }
+
+    if (amount > 1000) {
+      setMessage({ type: "error", text: "Maximum withdrawal is $1,000.00 per transaction" });
+      return;
+    }
+
+    if (amount > (userData?.balance || 0)) {
+      setMessage({ type: "error", text: "Insufficient balance" });
+      return;
+    }
+
+    try {
+      const conversion = await convertUSDtoSOL(amount, 2);
+      setConfirmDialog({
+        open: true,
+        amountUSD: amount,
+        amountSOL: conversion.solAmount,
+      });
+      setWithdrawDialog(false);
+    } catch (error: any) {
+      setMessage({ type: "error", text: `Failed to prepare withdrawal: ${error.message}` });
+    }
+  };
+
+  const handleConfirmWithdraw = async () => {
+    if (!confirmDialog.amountUSD || !confirmDialog.amountSOL || !userData) return;
+
+    const provider = getProvider();
+    if (!provider || !provider.publicKey) {
+      setMessage({ type: "error", text: "Please connect Phantom wallet to withdraw" });
+      setConfirmDialog({ open: false });
+      return;
+    }
+
+    try {
+      setWithdrawing(true);
+      setConfirmDialog({ open: false });
+
+      // Send SOL to user's wallet
+      const { signature, explorerUrl } = await sendSol(
+        userData.walletAddress!,
+        confirmDialog.amountSOL
+      );
+
+      const newBalance = userData.balance - confirmDialog.amountUSD;
+
+      // Update user balance
+      await updateDoc(doc(db, "users", auth.currentUser!.uid), {
+        balance: newBalance,
+        lastWithdrawal: new Date().toISOString(),
+      });
+
+      // Log withdrawal transaction
+      await addDoc(collection(db, "withdrawals"), {
+        userId: auth.currentUser!.uid,
+        email: userData.email,
+        amountUSD: confirmDialog.amountUSD,
+        amountSOL: confirmDialog.amountSOL,
+        walletAddress: userData.walletAddress,
+        status: "completed",
+        signature: signature,
+        explorerUrl: explorerUrl,
+        createdAt: new Date().toISOString(),
+        oldBalance: userData.balance,
+        newBalance: newBalance,
+      });
+
+      setMessage({ 
+        type: "success", 
+        text: `Successfully withdrew $${confirmDialog.amountUSD.toFixed(2)}! SOL has been sent to your wallet.`,
+        explorerUrl: explorerUrl
+      });
+
+      setWithdrawAmount("");
+      
+      // Refresh user data
+      await fetchUserData();
+
+    } catch (error: any) {
+      console.error("Withdrawal error:", error);
+      
+      if (error.message?.includes("cancelled") || error.message?.includes("rejected")) {
+        setMessage({ 
+          type: "error", 
+          text: "Transaction cancelled. Your balance has not been changed." 
+        });
+      } else {
+        setMessage({ 
+          type: "error", 
+          text: `Withdrawal failed: ${error.message}` 
+        });
+      }
+    } finally {
+      setWithdrawing(false);
+    }
   };
 
   if (loading) {
@@ -149,6 +306,26 @@ export default function DashboardPage() {
   return (
     <Container maxWidth="lg" sx={{ py: 4 }}>
       <Stack spacing={4}>
+        {message && (
+          <Alert
+            severity={message.type}
+            onClose={() => setMessage(null)}
+            action={
+              message.explorerUrl ? (
+                <Button 
+                  color="inherit" 
+                  size="small"
+                  onClick={() => window.open(message.explorerUrl, '_blank')}
+                >
+                  View Transaction
+                </Button>
+              ) : undefined
+            }
+          >
+            {message.text}
+          </Alert>
+        )}
+
         <Card
           sx={{
             p: 4,
@@ -216,12 +393,38 @@ export default function DashboardPage() {
                 <strong style={{ color: "#1E3A8A" }}>{userData.policyId}</strong>
               </Typography>
 
-              <Typography variant="body1">
+              <Typography variant="body1" sx={{ mb: 2 }}>
                 Emergency Fund Balance:&nbsp;
-                <strong style={{ color: "#0E9F6E" }}>
+                <strong style={{ color: "#0E9F6E", fontSize: "1.5rem" }}>
                   ${userData.balance.toFixed(2)}
                 </strong>
               </Typography>
+
+              {userData.walletAddress && userData.balance >= 10 && (
+                <Button
+                  variant="contained"
+                  color="primary"
+                  size="large"
+                  startIcon={<AccountBalanceWalletIcon />}
+                  onClick={handleWithdrawClick}
+                  disabled={withdrawing}
+                  sx={{ mt: 2, fontWeight: 600 }}
+                >
+                  {withdrawing ? "Processing..." : "Withdraw Funds"}
+                </Button>
+              )}
+
+              {!userData.walletAddress && (
+                <Alert severity="info" sx={{ mt: 2 }}>
+                  Connect a Solana wallet to withdraw your funds
+                </Alert>
+              )}
+
+              {userData.walletAddress && userData.balance < 10 && (
+                <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 2 }}>
+                  Minimum withdrawal: $10.00
+                </Typography>
+              )}
             </Box>
           </CardContent>
         </Card>
@@ -283,11 +486,10 @@ export default function DashboardPage() {
                               N/A
                             </Typography>
                           )}
-         
                         </TableCell>
-                                         <TableCell>
-  {tx.exchangeRate ? `$${tx.exchangeRate.toFixed(2)}/SOL` : 'N/A'}
-</TableCell>
+                        <TableCell>
+                          {tx.exchangeRate ? `$${tx.exchangeRate.toFixed(2)}/SOL` : 'N/A'}
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -297,6 +499,128 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </Stack>
+
+      {/* Withdraw Dialog */}
+      <Dialog 
+        open={withdrawDialog} 
+        onClose={() => !withdrawing && setWithdrawDialog(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Withdraw Funds</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ mt: 2 }}>
+            <Alert severity="info">
+              Funds will be sent as SOL to your connected Phantom wallet.
+            </Alert>
+
+            <TextField
+              label="Available Balance"
+              value={`$${userData?.balance.toFixed(2)}`}
+              fullWidth
+              disabled
+            />
+
+            <TextField
+              label="Wallet Address"
+              value={userData?.walletAddress || ""}
+              fullWidth
+              disabled
+            />
+
+            <TextField
+              label="Withdrawal Amount (USD)"
+              type="number"
+              fullWidth
+              autoFocus
+              value={withdrawAmount}
+              onChange={(e) => setWithdrawAmount(e.target.value)}
+              placeholder="Enter amount (min: $10, max: $1000)"
+              helperText="Minimum: $10.00 | Maximum: $1,000.00 per transaction"
+              onKeyPress={(e) => {
+                if (e.key === 'Enter') {
+                  handleWithdrawSubmit();
+                }
+              }}
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setWithdrawDialog(false)}>
+            Cancel
+          </Button>
+          <Button
+            onClick={handleWithdrawSubmit}
+            variant="contained"
+            disabled={!withdrawAmount || withdrawing}
+          >
+            Continue
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Confirm Withdrawal Dialog */}
+      <Dialog 
+        open={confirmDialog.open} 
+        onClose={() => !withdrawing && setConfirmDialog({ open: false })}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Confirm Withdrawal</DialogTitle>
+        <DialogContent>
+          <Alert severity="warning" sx={{ mb: 3 }}>
+            This will send SOL to your wallet. This action cannot be undone.
+          </Alert>
+
+          <Stack spacing={2}>
+            <TextField
+              label="Withdrawal Amount (USD)"
+              value={`$${confirmDialog.amountUSD?.toFixed(2)}`}
+              fullWidth
+              disabled
+            />
+            <TextField
+              label="You will receive (SOL)"
+              value={`${confirmDialog.amountSOL?.toFixed(4)} SOL`}
+              fullWidth
+              disabled
+              helperText="Includes 2% buffer for price volatility"
+            />
+            <TextField
+              label="Destination Wallet"
+              value={userData?.walletAddress || ""}
+              fullWidth
+              disabled
+            />
+            <TextField
+              label="New Balance"
+              value={`$${((userData?.balance || 0) - (confirmDialog.amountUSD || 0)).toFixed(2)}`}
+              fullWidth
+              disabled
+            />
+          </Stack>
+
+          <Alert severity="info" sx={{ mt: 2 }}>
+            You will need to approve this transaction in your Phantom wallet.
+          </Alert>
+        </DialogContent>
+        <DialogActions>
+          <Button 
+            onClick={() => setConfirmDialog({ open: false })} 
+            disabled={withdrawing}
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={handleConfirmWithdraw}
+            variant="contained"
+            color="primary"
+            disabled={withdrawing}
+          >
+            {withdrawing ? "Processing..." : "Confirm & Withdraw"}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Container>
   );
 }
