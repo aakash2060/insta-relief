@@ -355,25 +355,22 @@ export default function AdminDashboard() {
   }; // ========================================================== // 🆕 NEW: Function to call the existing simulateDisaster endpoint // ==========================================================
 
   // AdminDashboard.tsx: New function signature
-  const callSimulateDisaster = async (zip: string, eventType: string) => {
-    try {
-      // We include the &event=... parameter in the URL.
-      const response = await fetch(
-        // Uses template literal to insert the event type
-        `${SIMULATE_DISASTER_URL}?zip=${zip}&severity=PAYOUT_CONFIRMED&event=${eventType}`
-      );
-      if (!response.ok) {
-        console.error(
-          "❌ Failed to trigger backend email (HTTP Error):",
-          await response.text()
-        );
-      } else {
-        console.log(`✅ Confirmation email triggered for ${eventType}.`);
-      }
-    } catch (error) {
-      console.error("❌ Network error triggering simulateDisaster:", error);
+const callSimulateDisaster = async (zip: string, eventType: string, amount: string) => {
+  try {
+    const response = await fetch(
+      `${SIMULATE_DISASTER_URL}?zip=${zip}&severity=Extreme&event=${eventType}&amount=${amount}`
+    );
+
+    if (!response.ok) {
+      console.error("❌ Failed to trigger backend email (HTTP Error):", await response.text());
+    } else {
+      console.log(`✅ Confirmation email triggered for ${eventType}.`);
     }
-  }; // ========================================================== // 🔄 MODIFIED: Payout Logic (Swapped Firestore Update) // ==========================================================
+  } catch (error) {
+    console.error("❌ Network error triggering simulateDisaster:", error);
+  }
+};
+
 
   // 3. Update the call inside handleTriggerCatastrophe
   // Use the type from the catastropheData state
@@ -447,7 +444,7 @@ export default function AdminDashboard() {
             amountSOL
           ); // 2. 📧 TRIGGER EMAIL CONFIRMATION *WHILE STATUS IS ACTIVE* // Pass both the user's ZIP and the catastrophe type
 
-          await callSimulateDisaster(user.zip, catastropheData.type); // 3. Update Firestore Status *AFTER* email call
+          await callSimulateDisaster(user.zip, catastropheData.type, catastropheData.amount); // 3. Update Firestore Status *AFTER* email call
 
           await updateDoc(doc(db, "users", user.id), {
             balance: (user.balance ?? 0) + amountUSD,
@@ -562,24 +559,24 @@ export default function AdminDashboard() {
             onClick={() => setOpenCatastropheDialog(true)}
             sx={{ fontWeight: 600 }}
           >
-            Trigger Catastrophe          {" "}
+            Trigger Catastrophe{" "}
           </Button>
           {" "}
           <Button variant="outlined" onClick={handleLogout}>
-            Logout          {" "}
+            Logout{" "}
           </Button>
           {" "}
         </Stack>
         {" "}
       </Stack>
-      <AdminWalletConnect />     {" "}
+      <AdminWalletConnect />{" "}
       {message && (
         <Alert
           severity={message.type}
           onClose={() => setMessage(null)}
           sx={{ mb: 3 }}
         >
-          {message.text}       {" "}
+          {message.text}{" "}
         </Alert>
       )}
       <Box sx={{ borderBottom: 1, borderColor: "divider", mb: 3 }}>
