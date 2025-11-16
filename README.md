@@ -71,41 +71,5 @@ This repository is a demo/prototype. Do NOT use this code in production without 
 **License & Notes**
 This repository contains demo/proof-of-concept code (hackathon/demo). Verify licensing and remove any test credentials before sharing or deploying. The project is provided "as-is" for experimentation.
 
----
 
-If you'd like, I can:
-- shorten this README into a one-page investor / demo checklist,
-- create a `CONTRIBUTING.md` with steps for onboarding developers, or
-- open a PR that adds `README.md` to the nested `insta-relief/` folder as well.
 
-Want me to commit the same README into the nested `insta-relief/` folder too?
-# InstaRelief
-
-InstaRelief is a prototype micro‑insurance platform that detects NOAA weather alerts, pre‑credits impacted users, and enables admins to disburse Solana (SOL) payouts via Phantom. It combines Firebase auth + Firestore for user/state, a small AI admin assistant for automation, and on‑chain payments for demonstrative flows.
-
-Quick links
-- App entry: [src/App.tsx](src/App.tsx)
-- Auth / DB / Functions exports: [`auth`](src/firebase.ts), [`db`](src/firebase.ts), [`functions`](src/firebase.ts) — [src/firebase.ts](src/firebase.ts)
-- User dashboard: [`DashboardPage`](src/pages/Dashboard.tsx) — [src/pages/Dashboard.tsx](src/pages/Dashboard.tsx)
-- Admin UI & AI assistant: [`AdminDashboard`](src/pages/AdminDashboard.tsx), [`AdminLogin`](src/pages/AdminLogin.tsx), [`AIAssistant`](src/components/AIAssistant.tsx) — [src/pages/AdminDashboard.tsx](src/pages/AdminDashboard.tsx), [src/pages/AdminLogin.tsx](src/pages/AdminLogin.tsx), [src/components/AIAssistant.tsx](src/components/AIAssistant.tsx)
-- Solana helpers: [`sendSol`](src/lib/solana.ts), [`getProvider`](src/lib/solana.ts) — [src/lib/solana.ts](src/lib/solana.ts)
-- Price conversion: [`convertUSDtoSOL`](src/lib/priceService.ts) — [src/lib/priceService.ts](src/lib/priceService.ts)
-- NOAA map UI: [src/components/NoaaMap.tsx](src/components/NoaaMap.tsx)
-- Cloud functions (NOAA fetch, payouts, AI agent): [functions/index.js](functions/index.js)
-- Agent code: [`runClaudeAgent`](functions/agent/agent.js) & tool handlers — [functions/agent/agent.js](functions/agent/agent.js), [functions/agent/handlers.js](functions/agent/handlers.js)
-- Dev helper scripts: [scripts/setAdmin.cjs](scripts/setAdmin.cjs), [seedUser.js](seedUser.js), [disasterCall.js](disasterCall.js)
-
-Core Features
-- Auto-detect NOAA alerts (Cloud Function) and mark processed alerts — see [functions/index.js](functions/index.js).
-- Pre-credit impacted users' Firestore balance and track payouts — implemented in [functions/index.js](functions/index.js).
-- Admin flows to review and trigger disaster payouts, including AI pre-fill — see [src/pages/AdminDashboard.tsx](src/pages/AdminDashboard.tsx) and [src/components/AIAssistant.tsx](src/components/AIAssistant.tsx).
-- On‑chain demo payouts via Phantom on Solana devnet using [`sendSol`](src/lib/solana.ts).
-- User flows: signup ([src/pages/Onboarding.tsx](src/pages/Onboarding.tsx)), login ([src/pages/Login.tsx](src/pages/Login.tsx)), dashboard & withdrawals ([src/pages/Dashboard.tsx](src/pages/Dashboard.tsx)).
-
-Local development (frontend)
-1. Copy env values: create `.env` (see existing [.env](.env) in repo).
-2. Install & run:
-   ```sh
-   npm install
-   npm run dev
-   
