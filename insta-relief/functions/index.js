@@ -1,7 +1,6 @@
 const dotenv = require("dotenv");
 dotenv.config();
 
-const fetch = require("node-fetch");
 const functions = require("firebase-functions");
 const admin = require("firebase-admin");
 const { Anthropic } = require("@anthropic-ai/sdk");
@@ -10,6 +9,7 @@ const zipToCounty = require("./data/zip_to_county.json");
 // Initialization
 admin.initializeApp();
 const db = admin.firestore();
+const DEFAULT_PAYOUT = parseFloat(process.env.DEFAULT_PAYOUT) || 100;
 
 // -----------------------------------------------------
 // 2. SMTP Email Utility
@@ -60,50 +60,16 @@ function mapAreaToZips(areaDesc) {
     .map(([key, zip]) => zip);
 }
 
-async function handleUserAlert(doc, alert, pay) {
+async function handleUserAlert(doc, alert, pay, amountUSD = DEFAULT_PAYOUT) {
   console.log('=== ENTERING handleUserAlert ===');
-  
-  const smtpApiKey = process.env.SMTP2GO_API_KEY;
-  
-  console.log('SMTP API Key Status:', smtpApiKey ? 'Found' : 'Missing');
 
-  if (!smtpApiKey) {
-    const errorMsg = "SMTP API key missing! Set SMTP2GO_API_KEY in .env file";
-    console.error(errorMsg);
-    throw new Error(errorMsg);
-  }
+  const smtpApiKey = process.env.SMTP2GO_API_KEY;
+  if (!smtpApiKey) throw new Error("SMTP2GO_API_KEY missing");
 
   const user = doc.data();
-  console.log('Processing user:', user.email);
-  
   const name = user.name || user.email.split("@")[0];
 
-  const {
-    event,
-    severity,
-    headline,
-    description,
-    areaDesc,
-    id: alertId
-  } = alert.properties;
-
-  console.log('Alert details:', { event, severity, alertId });
-
-  // Rate limit check
-  const lastSent = user.lastAlertTimestamp || 0;
-  const thirtyMinutes = 30 * 60 * 1000;
-  const timeSinceLastAlert = Date.now() - lastSent;
-  
-  console.log('Rate limit check:', {
-    lastSent: lastSent ? new Date(lastSent).toISOString() : 'Never',
-    timeSinceLastMins: Math.round(timeSinceLastAlert / 60000),
-    willSkip: timeSinceLastAlert < thirtyMinutes
-  });
-  
-  if (timeSinceLastAlert < thirtyMinutes) {
-    console.log(`SKIPPING ${user.email} (rate limited)`);
-    return;
-  }
+  const { event, severity, headline, description, areaDesc, id: alertId } = alert.properties;
 
   console.log(`Preparing email for ${user.email}`);
 
@@ -113,33 +79,27 @@ async function handleUserAlert(doc, alert, pay) {
     <p>${description}</p>
     <p><b>Severity:</b> ${severity}</p>
     <p><b>Area:</b> ${areaDesc}</p>
+    <p><b>Payment Amount:</b> $${amountUSD}</p>
   `;
 
   if (pay) {
-    subject = `Emergency Fund Released: ${event}`;
-    html += `<p><strong>$100 has been released to your emergency fund.</strong></p>`;
-    console.log(`Processing payout for ${user.email}`);
-    
+    const amount = typeof amountUSD === "number" ? amountUSD : parseFloat(amountUSD) || DEFAULT_PAYOUT;
+    subject = `Emergency Fund Released: $${amount.toFixed(2)} (${event})`;
+    html += `<p><strong>$${amount.toFixed(2)} has been released to your emergency fund.</strong></p>`;
+
     await db.runTransaction(async (t) => {
       const snap = await t.get(doc.ref);
       const balance = snap.data().balance || 0;
       t.update(doc.ref, {
-        balance: balance + 100,
+        balance: balance + amount,
         status: "PAID",
         lastPayout: new Date().toISOString(),
+        lastPayoutAmount: amount
       });
     });
-    console.log(`Payout completed for ${user.email}`);
   }
 
-  console.log(`Updating lastAlertTimestamp for ${user.email}`);
-  await doc.ref.update({
-    lastAlertTimestamp: Date.now(),
-    lastAlertId: alertId,
-  });
-
   console.log(`Sending email to ${user.email}...`);
-  
   await sendEmail(
     smtpApiKey,
     [`${name} <${user.email}>`],
@@ -148,11 +108,11 @@ async function handleUserAlert(doc, alert, pay) {
     html,
     `${event} alert (${severity}) in ${areaDesc}. ${description}`
   );
-  
-  console.log(`Email sent successfully to ${user.email}`);
+
+  console.log('Email sent successfully');
 }
 
-async function handleZipAlert(zip, alert, pay) {
+async function handleZipAlert(zip, alert, pay, amountUSD = DEFAULT_PAYOUT) {
   console.log(`Looking up users for ZIP ${zip}...`);
   
   const users = await db.collection("users")
@@ -168,7 +128,7 @@ async function handleZipAlert(zip, alert, pay) {
   console.log(`Found ${users.size} user(s) for ZIP ${zip}`);
 
   const results = await Promise.allSettled(
-    users.docs.map(doc => handleUserAlert(doc, alert, pay))
+    users.docs.map(doc => handleUserAlert(doc, alert, pay, amountUSD))
   );
 
   results.forEach((result, index) => {
@@ -183,7 +143,7 @@ async function handleZipAlert(zip, alert, pay) {
 }
 
 async function fetchNoaaAlertsHandler() {
-  console.log("Fetching NOAA active alerts…");
+  console.log("Fetching NOAA active alerts...");
 
   const resp = await fetch("https://api.weather.gov/alerts/active");
   if (!resp.ok) {
@@ -220,7 +180,7 @@ async function fetchNoaaAlertsHandler() {
 
     for (const zip of zips) {
       const pay = shouldSendPayout(severity);
-      await handleZipAlert(zip, alert, pay);
+      await handleZipAlert(zip, alert, pay, DEFAULT_PAYOUT);
     }
     
     processedCount++;
@@ -278,8 +238,10 @@ exports.simulateDisaster = functions.https.onRequest(async (req, res) => {
     const zip = req.query.zip || req.body?.zip || "70401"; 
     const severity = req.query.severity || req.body?.severity || "Extreme";
     const event = req.query.event || req.body?.event || "Hurricane";
+    const amountParam = req.query.amount || req.body?.amount;
+    const amountUSD = amountParam ? parseFloat(amountParam) : DEFAULT_PAYOUT;
 
-    console.log(`Simulating ${event} (${severity}) for ZIP ${zip}`);
+    console.log(`Simulating ${event} (${severity}) for ZIP ${zip} with $${amountUSD} payout`);
 
     const fakeAlert = {
       properties: {
@@ -289,16 +251,18 @@ exports.simulateDisaster = functions.https.onRequest(async (req, res) => {
         areaDesc: zipToCounty[zip] || `Area for ZIP ${zip}`,
         headline: `${event} Warning - Emergency Alert System Activated`,
         description: `This is a SIMULATED ${event} alert for demonstration purposes. A ${severity.toLowerCase()} weather event has been detected in your area.`,
+        payoutAmountUSD: amountUSD
       },
     };
 
     const pay = shouldSendPayout(severity);
-    await handleZipAlert(zip, fakeAlert, pay);
+    await handleZipAlert(zip, fakeAlert, pay, amountUSD);
 
     res.status(200).json({
       success: true,
       message: `Simulated ${event} alert processed for ZIP ${zip}`,
       payoutSent: pay,
+      payoutAmountUSD: amountUSD,
       severity: severity,
       affectedZip: zip,
       timestamp: new Date().toISOString()
@@ -342,8 +306,7 @@ exports.checkUsers = functions.https.onRequest(async (req, res) => {
         lastAlert: data.lastAlertTimestamp 
           ? new Date(data.lastAlertTimestamp).toISOString() 
           : "Never",
-        canReceiveAlert: !data.lastAlertTimestamp || 
-          (Date.now() - data.lastAlertTimestamp > 30 * 60 * 1000)
+        canReceiveAlert: true
       };
     });
 
@@ -367,6 +330,9 @@ exports.checkUsers = functions.https.onRequest(async (req, res) => {
 
 exports.disaster = functions.https.onCall(async (request, context) => {
   const zip = request.data.zip;
+  const amountParam = request.data.amount;
+  const amountUSD = amountParam ? parseFloat(amountParam) : DEFAULT_PAYOUT;
+  
   if (!zip) {
     throw new functions.https.HttpsError(
       "invalid-argument",
@@ -393,34 +359,15 @@ exports.disaster = functions.https.onCall(async (request, context) => {
     return { message: `No user found in ${zip}` };
   }
 
-  // Filter users who haven't been paid in last 1 hour
-  const now = Date.now();
-  const oneHour = 60 * 60 * 1000;
   const eligibleUsers = [];
-
   for (const userDoc of userSnap.docs) {
-    const userData = userDoc.data();
-    const lastPayout = userData.lastPayout
-      ? new Date(userData.lastPayout).getTime()
-      : 0;
-
-    if (now - lastPayout >= oneHour) {
-      eligibleUsers.push(userDoc);
-    } else {
-      console.log(
-        `Skipping ${userData.email} - paid ${Math.round(
-          (now - lastPayout) / 60000
-        )} minutes ago`
-      );
-    }
+    eligibleUsers.push(userDoc);
   }
 
-  console.log(`${eligibleUsers.length} eligible user(s) after filtering`);
+  console.log(`${eligibleUsers.length} user(s) will receive alert/payout`);
 
   if (eligibleUsers.length === 0) {
-    return {
-      message: `No eligible users in ${zip} (all paid within last hour)`,
-    };
+    return { message: `No users found in ZIP ${zip}` };
   }
 
   const result = [];
@@ -439,26 +386,28 @@ exports.disaster = functions.https.onCall(async (request, context) => {
 
     try {
       await user.ref.update({
-        balance: (userData.balance || 0) + 100,
+        balance: (userData.balance || 0) + amountUSD,
         lastPayout: new Date().toISOString(),
       });
+
+      const htmlBody = `
+        <h2 style="color:red;">Alert - Emergency Fund Released</h2>
+        <p>Dear ${name},</p>
+        <p>Your micro-insurance policy has been triggered for ZIP <b>${zip}</b>.</p>
+        <p><strong>$${amountUSD.toFixed(2)} has been released to your emergency fund.</strong></p>
+        <p>Current balance: $${((userData.balance || 0) + amountUSD).toFixed(2)}</p>
+        <p>Stay safe,<br/>Disaster Alert System</p>
+      `;
+
+      const textBody = `Dear ${name},\n\nYour micro-insurance policy has been triggered for ZIP ${zip}. $${amountUSD.toFixed(2)} has been released to your emergency fund.\n\nCurrent balance: $${((userData.balance || 0) + amountUSD).toFixed(2)}\n\nStay safe.`;
 
       const emailResponse = await sendEmail(
         smtpConfig.api_key,
         [`${name} <${email}>`],
         "Disaster Alert <niraj.bhatta@selu.edu>",
-        "Flood Alert - Emergency Fund Released",
-        `
-          <h2 style="color:red;">Flood Alert</h2>
-          <p>Dear ${name},</p>
-          <p>Your micro-insurance policy has been triggered for ZIP <b>${zip}</b>.</p>
-          <p><strong>$100 has been released to your emergency fund.</strong></p>
-          <p>Current balance: $${(userData.balance || 0) + 100}</p>
-          <p>Stay safe,<br/>Disaster Alert System</p>
-        `,
-        `Dear ${name},\n\nYour policy has been triggered for ZIP ${zip}. $100 has been released to your emergency fund.\n\nCurrent balance: $${
-          (userData.balance || 0) + 100
-        }\n\nStay safe.`
+        "Alert - Emergency Fund Released",
+        htmlBody,
+        textBody
       );
 
       console.log(`Email sent to ${email}`, emailResponse);
@@ -507,12 +456,12 @@ exports.sendCatastropheEmail = functions.https.onRequest(async (req, res) => {
 
     console.log(`Sending catastrophe email to ${userEmail}`);
 
-    const subject = `Emergency Relief Payment Received - ${catastropheType}`;
+    const subject = `Emergency Relief Payment: $${amount} - ${catastropheType}`;
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <h2 style="color:#4CAF50;">Emergency Relief Payment Received</h2>
         <p>Dear ${userName},</p>
-        <p>Your emergency relief payment has been successfully processed and deposited to your Phantom wallet.</p>
+        <p>Your emergency relief payment of <b>$${amount}</b> has been successfully processed and deposited to your Phantom wallet.</p>
         
         <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
           <p style="margin: 5px 0;"><b>Disaster Type:</b> ${catastropheType}</p>
@@ -582,21 +531,11 @@ exports.adminAgent = functions.https.onRequest(
       return res.status(400).json({ error: "Missing query" });
     }
 
-    // Initialize Anthropic INSIDE the function to avoid cold start timeout
     const anthropic = new Anthropic({
       apiKey: process.env.CLAUDE_API_KEY,
     });
 
-    // AI Tools
     const tools = [
-      {
-        name: "get_platform_config",
-        description: "Get platform configuration including available catastrophe types, active ZIP codes, and example scenarios.",
-        input_schema: {
-          type: "object",
-          properties: {}
-        }
-      },
       {
         name: "get_users_by_zip",
         description: "Get all users in specific ZIP code(s) with their balance and wallet info.",
@@ -614,7 +553,7 @@ exports.adminAgent = functions.https.onRequest(
       },
       {
         name: "auto_trigger_catastrophe",
-        description: "Trigger a catastrophe event - updates balances AND prepares Phantom wallet form. After admin confirms, blockchain payment will be sent and THEN emails will go out automatically.",
+        description: "Trigger a catastrophe event - updates balances AND prepares Phantom wallet form.",
         input_schema: {
           type: "object",
           properties: {
@@ -637,7 +576,7 @@ exports.adminAgent = functions.https.onRequest(
             },
             description: {
               type: "string",
-              description: "Event description (optional - AI generates if not provided)"
+              description: "Event description (optional)"
             }
           },
           required: ["type", "location", "zipCodes", "amount"]
@@ -671,61 +610,10 @@ exports.adminAgent = functions.https.onRequest(
       }
     ];
 
-    // Tool Execution
     async function executeToolCall(toolName, toolInput) {
       console.log(`Executing: ${toolName}`, toolInput);
 
       switch (toolName) {
-        case "get_platform_config": {
-          const usersSnapshot = await db.collection("users").get();
-          const activeZips = new Set();
-          const zipStats = {};
-          
-          usersSnapshot.forEach(doc => {
-            const data = doc.data();
-            if (data.zip) {
-              activeZips.add(data.zip);
-              if (!zipStats[data.zip]) {
-                zipStats[data.zip] = { total: 0, withWallet: 0 };
-              }
-              zipStats[data.zip].total++;
-              if (data.walletAddress) {
-                zipStats[data.zip].withWallet++;
-              }
-            }
-          });
-
-          const recentCatastrophes = await db.collection("catastrophes")
-            .orderBy("createdAt", "desc")
-            .limit(20)
-            .get();
-          
-          const usedTypes = new Set();
-          recentCatastrophes.forEach(doc => {
-            const data = doc.data();
-            if (data.type) usedTypes.add(data.type);
-          });
-
-          const catastropheTypes = [
-            { type: "Flood", description: "Flooding event" },
-            { type: "Hurricane", description: "Hurricane storm" },
-            { type: "Earthquake", description: "Seismic activity" },
-            { type: "Wildfire", description: "Forest fire" },
-            { type: "Tornado", description: "Tornado event" },
-            { type: "Winter Storm", description: "Severe winter weather" },
-            { type: "Drought", description: "Extended drought" }
-          ];
-
-          return {
-            catastropheTypes,
-            activeZips: Array.from(activeZips).sort(),
-            zipStats,
-            recentlyUsedTypes: Array.from(usedTypes),
-            totalUsers: usersSnapshot.size,
-            suggestedAmounts: [50, 100, 150, 200, 250, 500]
-          };
-        }
-
         case "get_users_by_zip": {
           const { zipCodes } = toolInput;
           const allUsers = [];
@@ -793,7 +681,7 @@ exports.adminAgent = functions.https.onRequest(
                   walletAddress: userData.walletAddress
                 });
 
-                console.log(`Balance updated: ${userData.email} $${oldBalance} → $${newBalance}`);
+                console.log(`Balance updated: ${userData.email} $${oldBalance} -> $${newBalance}`);
               } catch (error) {
                 errors.push({
                   email: userData.email,
@@ -811,7 +699,7 @@ exports.adminAgent = functions.https.onRequest(
           const estimatedSOL = estimatedCost / 100;
 
           const finalDescription = description || 
-            `${type} disaster affecting ZIP codes: ${zipCodes.join(", ")}. Emergency relief payout of $${amount} per affected user. Balances have been pre-credited in Firestore.`;
+            `${type} disaster affecting ZIP codes: ${zipCodes.join(", ")}. Emergency relief payout of $${amount} per affected user.`;
 
           return {
             action: "AUTO_CATASTROPHE_TRIGGERED",
@@ -847,7 +735,7 @@ exports.adminAgent = functions.https.onRequest(
             },
 
             message: usersWithWallet.length > 0 
-              ? `READY TO EXECUTE!\n\nBalance Updates:\n• ${balanceUpdates.length} users updated in Firestore\n• $${balanceUpdates.length * amount} total added to balances\n\nPhantom Trigger:\n• ${usersWithWallet.length} users ready to receive SOL\n• ${estimatedSOL} SOL needed ($${estimatedCost})\n• ${usersWithoutWallet.length} users without wallets (skipped)\n\nNext: Click the button to open pre-filled dialog and trigger Phantom!`
+              ? `READY TO EXECUTE!\n\nBalance Updates:\n- ${balanceUpdates.length} users updated in Firestore\n- $${balanceUpdates.length * amount} total added to balances\n\nPhantom Trigger:\n- ${usersWithWallet.length} users ready to receive SOL\n- ${estimatedSOL} SOL needed ($${estimatedCost})\n- ${usersWithoutWallet.length} users without wallets (skipped)\n\nNext: Click the button to open pre-filled dialog and trigger Phantom!`
               : `Balance updated for ${balanceUpdates.length} users, but NONE have Phantom wallets connected. Cannot send SOL.`
           };
         }
@@ -937,7 +825,6 @@ exports.adminAgent = functions.https.onRequest(
       }
     }
 
-    // AI Agentic Loop
     const messages = [{ role: "user", content: query }];
     let continueLoop = true;
     let iterationCount = 0;
@@ -955,7 +842,7 @@ exports.adminAgent = functions.https.onRequest(
 WORKFLOW:
 When admin wants to trigger a catastrophe:
 1. Use auto_trigger_catastrophe tool
-2. This automatically updates ALL user balances in Firestore and prepares catastrophe trigger form for Phantom wallet
+2. This automatically updates ALL user balances in Firestore and prepares catastrophe trigger form
 3. Admin reviews and confirms in UI
 4. Phantom wallet sends SOL payments
 5. Emails are sent automatically AFTER successful blockchain payment
@@ -965,12 +852,10 @@ Your capabilities:
 - Auto-fill catastrophe forms
 - Analyze user data and provide recommendations
 - Review catastrophe history
-- Answer questions about the platform
 
 Platform details:
 - SERVICE AREA: Louisiana, USA (Hammond, Baton Rouge, New Orleans, Lafayette areas)
 - Primary ZIP codes: 70401-70403 (Hammond), 70112-70119 (New Orleans), 70801-70809 (Baton Rouge)
-- Hammond assumption: If user says "Hammond" without state, assume Hammond, Louisiana
 - Users have Phantom wallet addresses for SOL payments
 - Balances tracked in Firestore (USD)
 - SOL payments via Phantom (1 SOL = $100)
@@ -981,7 +866,7 @@ Available catastrophe types:
 - Flood, Hurricane, Earthquake, Wildfire, Tornado, Winter Storm, Drought
 
 FORMATTING CATASTROPHE EVENTS:
-When showing catastrophe events, display actual numbers in this format:
+When showing catastrophe events, display actual numbers:
 
 Event NUMBER:
   Type = VALUE
@@ -996,7 +881,7 @@ Event NUMBER:
   Emails Sent = NUMBER
   Triggered By = VALUE
 
-Be proactive, clear, and helpful in your responses.`,
+Be proactive, clear, and helpful.`,
         tools,
         messages
       });
@@ -1048,4 +933,3 @@ Be proactive, clear, and helpful in your responses.`,
     return res.status(500).json({ error: error.message });
   }
 });
-
